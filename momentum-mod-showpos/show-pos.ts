@@ -123,7 +123,8 @@ if (children.length > 0) {
     physicalButtons: physicalButtons
 };
 
-
+//Prevent telemetry queue from growing beyond its configuired max size
+//If the queue is full then discard the oldest sample to make room for newest data so we prioritize recent player information
 if (telemetryQueue.length >= MAX_QUEUE_SIZE) {
     telemetryQueue.shift();
 }
@@ -135,14 +136,18 @@ telemetryQueue.push({
 };
     //Create a loop that continuously sends updated player data to the server
 
-
+//Transmit queued telemetry sample to local server in batches
+//This allows for reduced HTTP request overhear while allowing multiple samples to be transmitted together
+//Multiple requests can remain active simultaneously to prevent transmission from becoming a bottleneck
 const sendBatch = () => {
     while (
         activeRequests < MAX_CONCURRENT_REQUESTS &&
         telemetryQueue.length > 0
     ) {
         const oldestQueuedAtMs = telemetryQueue[0].queuedAtMs;
-
+        //Check whether the oldest qued sample has exceeded the maximum allowed bacthing delay
+        //If not enough samples have accumulated then wait briefly for additional samples
+        //Once max wait reached we send the avaliable samples
         const batchExpired =
             Date.now() - oldestQueuedAtMs >= MAX_BATCH_WAIT_MS;
 
@@ -155,7 +160,7 @@ const sendBatch = () => {
 
         const queuedBatch = telemetryQueue.splice(0, BATCH_SIZE);
         const batch = queuedBatch.map(item => item.data);
-
+        //Increment the active req  uest counter before transmitting the batch ensuing the configuired max number of concurrent HTTP request is kept
         activeRequests++;
 
         $.AsyncWebRequest('http://127.0.0.1:8080/batch', {
@@ -174,6 +179,7 @@ const sendBatch = () => {
         } as any);
     }
 };
+//collection loop 
 
  const requestLoop = () => {
 
