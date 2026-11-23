@@ -4,27 +4,31 @@ const http = require("http");
 const querystring = require("querystring");
 const WebSocket = require("ws");
 
-//Store latest player data
+//Store the most recently received player telemetry sample
 let latestData= null;
+//Assign a unique, sequential ID to each accepted telemetry sample
 let nextSampleId = 1;
 
 
-
+//Send a JSON-formatted HTTP response with the specified status code and data
 function sendJSON(res, statusCode, data){
+    //Prevent clients from caching responses so they always receive fresh data
     res.writeHead(statusCode,{
         "Content-Type": "application/json",
         "Cache-Control": "no-store"
     });
     res.end(JSON.stringify(data));
 }
+//Broadcast accepted telemetry samples to all currently connected WebSocket clients
 function broadcastTelemetry(samples) {
+    //Skip broadcasting if there are no connected WebSocket clients
     if (wss.clients.size === 0) return;
-
+    //Package the telemetry samples into a JSON message for Python to process
     const message = JSON.stringify({
         type: "telemetry",
         samples: samples
     });
-
+    //Send the telemetry batch to every connected client with an open connection
     for (const client of wss.clients) {
         if (client.readyState === WebSocket.OPEN) {
             client.send(message, error => {
@@ -47,7 +51,7 @@ const server = http.createServer((req, res) => {
             timestampMs: Date.now(),
         });
     }
-
+//Receive batches of player telemetry samples through an HTTP POST request
 if (req.method === "POST" && req.url === "/batch") {
     let body = "";
 
