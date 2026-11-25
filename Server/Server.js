@@ -96,10 +96,12 @@ if (req.method === "POST" && req.url === "/batch") {
                     });
                 }
             }
-
+            //Record when the server receives the batch
             const serverReceivedAtMs = Date.now();
+            //Store the validated samples after assigning server-side metadata
             const acceptedSamples = [];
             for (const data of batch) {
+                //Attach unique ID and server-side timing information to each accepted sample
                 const sample = {
                     ...data,
                     sampleId: nextSampleId++,
@@ -108,11 +110,12 @@ if (req.method === "POST" && req.url === "/batch") {
                         serverReceivedAtMs - data.timestampMs
                 };
                 acceptedSamples.push(sample);
+                //Keep the sample with the newest timestamp as the server's latest telemetry data
                 if(latestData === null || sample.timestampMs >= latestData.timestampMs){
                     latestData = sample;
                 }
             }
-
+            //Brodcast the accepted batch to connected python clients after processing is complete
             broadcastTelemetry(acceptedSamples);
             return sendJSON(res, 200, {
                 ok: true,
@@ -132,7 +135,7 @@ if (req.method === "POST" && req.url === "/batch") {
     return;
 }
 });
-
+//Create a websocket server that shares the HTTP server's connection
 const wss = new WebSocket.Server({ noServer: true });
 
 // Handle WebSocket upgrade requests
@@ -175,4 +178,3 @@ server.listen(8080, "127.0.0.1", () => {
     //Confirm in the terminal that the server has started successfully
     console.log("Server listening on http://127.0.0.1:8080");
 });
-// Create WebSocket server using the existing HTTP server
