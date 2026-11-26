@@ -2,51 +2,51 @@ import { PanelHandler } from 'util/module-helpers';
 import { CustomizerPropertyType, registerHUDCustomizerComponent } from 'common/hud-customizer';
 import { getTextShadowFast } from 'common/hud-customizer';
 
-//Use Panorama API to enable cl_showpos 1 allowing us to read player's X,Y and Z coordinates from the HUD
+//Enable cl_showpos through the Panorama API to expose player position coordinates through the HUD
  GameInterfaceAPI.ConsoleCommand('cl_showpos 1');
 
-//Collection interval 0 allows telemetry to be collected as frequently as possible
+//The following transmission settings were selected through benchmarking to balance throughput and frame synchronization latency
+//Set collection interval to 0 so we can collect telemetry as frequently as Panorama's scheduler allows
 const COLLECTION_INTERVAL_SECONDS = 0;
 //Samples are sent in batches of 5, with a maximum wait of 5ms before sending an incomplete batch
 const BATCH_SIZE = 5;
 const MAX_BATCH_WAIT_MS = 5;
-//The que is limited to 50 samples to prevent excessive memory usage
+//The queue is limited to 50 samples to prevent unbounded memory growth
 const MAX_QUEUE_SIZE = 50;
-//Allow up to 15 HTTP requests to improve telemetry transmission
+//Allow up to 15 HTTP requests to increase transmission throughput
 const MAX_CONCURRENT_REQUESTS = 15;
-//Track the number of HTTP requests currently being processed
+//Track the number of HTTP requests currently in progress
 let activeRequests = 0;
-//Store collected telemetry samples temporarily until they are ready to be transmitted to the server
+//Temporarily store collected telemetry samples until they are ready to be transmitted to the server
 let telemetryQueue = [];
 
 
-//Collect the current player state and send it to our local server 
-//Record the timestamp when telemetry collection begins so each samples can be associated with its collection time
 const ServerPost = () => {
+    //Record the start time of telemetry collection for synchronization with captured frames
     const collectionTimestampMs = Date.now();
 
-//Store the player's current position 
-//Set to null because the position may not be available in some states such as during map selection
-//If a valid position is found it will be stored here
+//Initialize position as null because the position may be unavailable in certain states such as during map selection
+//A valid position is assigned once it has been successfully extracted from the HUD
 let position = null;
 
-//Get the current UI context panel and its child panels to locate the containing cl_showpos data
+//Get the current UI context panel and its child panels to locate the cl_showpos display
 const cp = $.GetContextPanel();
 const children = cp.Children();
 
-//Look for panel containing the cl_showpos position display
+//Locate the panel containing the cl_showpos position display
 if (children.length > 0) {
     const showPosPanel = children[0];
     const labels = showPosPanel.Children();
 
-    //Through testing the first label contains the player position we want (labels[0])
+    //This panel structure was identified through testing
+    //The first label contains the player position (labels[0])
     //The second label contains the view angle (labels[1])
     if (labels.length > 0) {
         const posLabel = labels[0] as Label;
 
-        //We make sure the label exists and contains position value
+        //Verify that the label exists and contains the expected position prefix
         if (posLabel && posLabel.text.startsWith('Pos:')) {
-            //Remove "Pos:" and split the remaining position string into individual values
+            //Remove "Pos:" prefix and split the remaining position string into individual values
             //Each value is then converted from a string into a number
             //Example "Pos: 100 200 300" will then become [100, 200, 300]
             const values = posLabel.text
@@ -55,7 +55,7 @@ if (children.length > 0) {
                 .split(/\s+/)
                 .map(Number);
 
-            //Accept the position if we receive exactly 3 valid numbers, then assign the values at each index to X, Y, and Z
+            //Accept the position only if we receive exactly 3 valid numbers, then assign the values at each index to X, Y, and Z
             if (values.length === 3 && values.every(Number.isFinite)) {
                 position = {
                     x: values[0],
@@ -68,45 +68,34 @@ if (children.length > 0) {
 }
 
 
-    //Get player's current view angles
+    //Collect the player's current movement state
     const angles = MomentumPlayerAPI.GetAngles();
-    //Get player's velocity 
     const velocity = MomentumPlayerAPI.GetVelocity();
-    //Get player's movement energy 
     const energy = MomentumPlayerAPI.GetEnergy();
-    //Get movement wishVel 
     const wishVel = MomentumMovementAPI.GetMoveHudData().wishVel;
-    //Get Momentum Timer
-    const timer = MomentumTimerAPI.GetObservedTimerStatus();
-
-    const runTimer = timer.runTime;
-    //Get Majornum
-    const majorNum = timer.majorNum;
-    //Get Minor num
-    const minorNum =timer.minorNum;
-    //Get seg countgame
-    const segmentsCount = timer.segmentsCount;
-    //Get checkpoint count
-    const segmentCheckpointsCount  = timer.segmentCheckpointsCount;
-    //Get statistics from the player's previous movement tick 
-    const lastTick = MomentumMovementAPI.GetLastTickStats();
-    //Get current game time 
-    const gameTime = MomentumMovementAPI.GetCurrentTime();
-    //Check which movement states the player is in 
     const ducking = MomentumPlayerAPI.IsDucking();
-    //Get  player's input buttons 
-    const physicalButtons = MomentumInputAPI.GetButtons().physicalButtons;
-    //Get player movement type
-    const moveType = MomentumMovementAPI.GetMoveType();
-    //Get Tick interval
-    const tickInterval = MomentumMovementAPI.GetTickInterval();
-    //Get map name
-    const mapName = MapCacheAPI.GetMapName();
-    //Calculate the player's total 3D speed using magnitude of the velocity vector
     const speed = Math.sqrt(velocity.x * velocity.x + velocity.y * velocity.y + velocity.z * velocity.z);
 
-    //Combine all the collected player/game information into a single object
-    //This object will be converted to JSON before being sent to the server
+    //Collect timer, game time, segment, checkpoint and tick interval information
+    const timer = MomentumTimerAPI.GetObservedTimerStatus();
+    const runTimer = timer.runTime;
+    const gameTime = MomentumMovementAPI.GetCurrentTime();
+    const majorNum = timer.majorNum;
+    const minorNum =timer.minorNum;
+    const segmentsCount = timer.segmentsCount;
+    const segmentCheckpointsCount  = timer.segmentCheckpointsCount;
+    const tickInterval = MomentumMovementAPI.GetTickInterval();
+
+    //Collect statistics from the player's previous movement tick 
+    const lastTick = MomentumMovementAPI.GetLastTickStats();
+
+    //Collect additional movement and game state
+    const physicalButtons = MomentumInputAPI.GetButtons().physicalButtons;
+    const moveType = MomentumMovementAPI.GetMoveType();
+    const mapName = MapCacheAPI.GetMapName();
+
+    //Combine all the collected player/game information into a single sample
+    //This object will be serialized into JSON before being sent to the local server
     const data = {
     timestampMs: collectionTimestampMs,
     runTime: runTimer,
@@ -130,23 +119,23 @@ if (children.length > 0) {
 };
 
 //Prevent telemetry queue from growing beyond its configured max size
-//If the queue is full then discard the oldest sample to make room for newest data so we prioritize recent player information
+//If the queue is full then discard the oldest sample to make room for newest data, prioritizing recent player information
 if (telemetryQueue.length >= MAX_QUEUE_SIZE) {
     telemetryQueue.shift();
 }
-//Store telemetry sample alongside its queue timestamp
-//The queue timestamp is used to determine when a batch should be sent if it has not reached the configured batch size
+//Store telemetry sample alongside the time it entered the queue
+//The queue timestamp is used to enforce the maximum batching delay
 telemetryQueue.push({
     data: data,
     queuedAtMs: Date.now()
 });
 };
-    //Create a loop that continuously sends updated player data to the server
 
 //Transmit queued telemetry sample to local server in batches
-//This allows for reduced HTTP request overhear while allowing multiple samples to be transmitted together
-//Multiple requests can remain active simultaneously to prevent transmission from becoming a bottleneck
+//This allows for reduced HTTP request overhead by transmitting multiple telemetry samples in a single request 
+//Multiple requests can remain active simultaneously to increase transmission throughput
 const sendBatch = () => {
+    //Continue transmitting while there is available request capacity and queued telemetry
     while (
         activeRequests < MAX_CONCURRENT_REQUESTS &&
         telemetryQueue.length > 0
@@ -164,13 +153,14 @@ const sendBatch = () => {
         ) {
             return;
         }
-         //Remove up to BATCH_SIZE samples from the queue to create the next batch
-        //splice() removes the sample from the que so they cannot be included in another request
+        //Remove up to BATCH_SIZE samples from the queue to create the next batch
+        //splice() removes the sample from the queue so they cannot be included in another request
         const queuedBatch = telemetryQueue.splice(0, BATCH_SIZE);
         const batch = queuedBatch.map(item => item.data);
-        //Increment the active request counter before transmission ensuring the configured max number of concurrent HTTP request is kept
+        //Increment the active request counter before transmission ensuring the configured max number of concurrent HTTP request limit is enforced
         activeRequests++;
-        //Send the batch to the local Node,js server using HTTP POST request
+
+        //Send the telemetry batch to the local Node.js server using an HTTP POST request
         //Convert the batch into JSON so the server can parse and process the samples
         $.AsyncWebRequest('http://127.0.0.1:8080/batch', {
             type: 'POST',
@@ -183,7 +173,7 @@ const sendBatch = () => {
                 sendBatch();
             },
             //If transmission fails release the request and continue processing the remaining queue
-            //The failed batch is not retried so its samples is discarded
+            //The failed batch is not retried so its samples are discarded
             error: () => {
                 activeRequests--;
                 sendBatch();
@@ -191,7 +181,8 @@ const sendBatch = () => {
         } as any);
     }
 };
-//Continuously collect telemetry, attempt to transmit queued samples and schedule the next collection cycle 
+
+//Main telemetry loop which continuously collects telemetry, attempts to transmit queued samples and schedules the next collection cycle 
  const requestLoop = () => {
 
     ServerPost();
@@ -201,9 +192,8 @@ const sendBatch = () => {
     $.Schedule(COLLECTION_INTERVAL_SECONDS, requestLoop);
 };
 
-// Start collection
+// Start telemetry collection loop
 requestLoop();
-    
 
 @PanelHandler()
 class HudShowPosHandler {
