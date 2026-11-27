@@ -1,14 +1,17 @@
-//Use Node's HTTP module which provides functionality needed to create and run the server
+//Import Node's HTTP module which provides functionality needed to create and run the server
 const http = require("http");
-//Use querystring module to parse data received in the HTTP request body
+
+//Import querystring module to parse data received in the HTTP request body
 const querystring = require("querystring");
+
+//Import the ws library to enable Websocket communication with python
 const WebSocket = require("ws");
 
 //Store the most recently received player telemetry sample
 let latestData= null;
+
 //Assign a unique, sequential ID to each accepted telemetry sample
 let nextSampleId = 1;
-
 
 //Send a JSON-formatted HTTP response with the specified status code and data
 function sendJSON(res, statusCode, data){
@@ -44,7 +47,7 @@ function broadcastTelemetry(samples) {
 //Create the HTTP server and handle incoming requests
 const server = http.createServer((req, res) => {
 
-    //Server Health check endpoint
+    //Server Health check endpoint to verify that the server is running
     if (req.method === "GET" && req.url === "/health") {
         return sendJSON(res, 200, {
             status: "online",
@@ -61,6 +64,7 @@ if (req.method === "POST" && req.url === "/batch") {
 
     req.on("end", () => {
         try {
+            //Parse the request body to extract serialized telemetry batch
             const formData = querystring.parse(body);
             const rawPayload = formData.payload;
 
@@ -82,7 +86,7 @@ if (req.method === "POST" && req.url === "/batch") {
                 });
             }
 
-            // Validate the entire batch before storing anything.
+            // Validate every sample before storing anything
             for (const data of batch) {
                 if (
                     data === null ||
@@ -96,12 +100,13 @@ if (req.method === "POST" && req.url === "/batch") {
                     });
                 }
             }
-            //Record when the server receives the batch
+            //Record when the server finished receiving the batch
             const serverReceivedAtMs = Date.now();
             //Store the validated samples after assigning server-side metadata
             const acceptedSamples = [];
+
             for (const data of batch) {
-                //Attach unique ID and server-side timing information to each accepted sample
+                //Assign each sample a unique ID and calculate its transport delay
                 const sample = {
                     ...data,
                     sampleId: nextSampleId++,
@@ -115,7 +120,7 @@ if (req.method === "POST" && req.url === "/batch") {
                     latestData = sample;
                 }
             }
-            //Brodcast the accepted batch to connected python clients after processing is complete
+            //Broadcast the processed batch to connected python clients after processing is complete
             broadcastTelemetry(acceptedSamples);
             return sendJSON(res, 200, {
                 ok: true,
@@ -135,7 +140,7 @@ if (req.method === "POST" && req.url === "/batch") {
     return;
 }
 });
-//Create a websocket server that shares the HTTP server's connection
+//Create a websocket server that uses the existing HTTP server
 const wss = new WebSocket.Server({ noServer: true });
 
 // Handle WebSocket upgrade requests
